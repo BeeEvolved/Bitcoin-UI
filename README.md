@@ -74,7 +74,7 @@ We take your security and trust seriously. That's why our development process is
 
 ## Getting Started
 
-1. **Clone the repo** (private, for now) or fork it if you have access.
+1. **Clone the repo** or fork it if you have access.
 2. **Open the Xcode project** on macOS.
 3. **Build & run** on an iOS simulator, a real device, or on macOS.
 4. Configure your node’s **RPC credentials** to connect the app securely.
