@@ -2,13 +2,12 @@
 import SwiftUI
 import Combine
 import Security
+import Foundation
 
-//  HighlightableText View
-
+// HighlightableText View
 struct HighlightableText: View {
     let text: String
     @State private var isHighlighted = false
-
     var body: some View {
         Text(text)
             .padding(4)
@@ -23,11 +22,10 @@ struct HighlightableText: View {
     }
 }
 
-//  Keychain Helper
-
+// Keychain Helper
 class KeychainHelper {
     static let shared = KeychainHelper()
-    
+  
     func save(_ service: String, account: String, data: Data) -> OSStatus {
         let query = [
             kSecClass as String: kSecClassGenericPassword,
@@ -38,7 +36,7 @@ class KeychainHelper {
         SecItemDelete(query as CFDictionary)
         return SecItemAdd(query as CFDictionary, nil)
     }
-    
+  
     func read(_ service: String, account: String) -> Data? {
         let query = [
             kSecClass as String: kSecClassGenericPassword,
@@ -54,7 +52,7 @@ class KeychainHelper {
         }
         return nil
     }
-    
+  
     func delete(_ service: String, account: String) {
         let query = [
             kSecClass as String: kSecClassGenericPassword,
@@ -63,7 +61,7 @@ class KeychainHelper {
         ] as [String: Any]
         SecItemDelete(query as CFDictionary)
     }
-    
+  
     func saveCredentials(username: String, password: String) {
         if let userData = username.data(using: .utf8),
            let passData = password.data(using: .utf8) {
@@ -71,7 +69,7 @@ class KeychainHelper {
             _ = save("BitcoinNodeRPC", account: "password", data: passData)
         }
     }
-    
+  
     func loadCredentials() -> (username: String, password: String)? {
         guard let userData = read("BitcoinNodeRPC", account: "username"),
               let passData = read("BitcoinNodeRPC", account: "password"),
@@ -81,28 +79,27 @@ class KeychainHelper {
         }
         return (username, password)
     }
-    
+  
     func clearCredentials() {
         delete("BitcoinNodeRPC", account: "username")
         delete("BitcoinNodeRPC", account: "password")
     }
 }
 
-//  RPC Service
-
+// RPC Service
 class RPCService {
     var nodeAddress: String
     var rpcPort: String
     var rpcUser: String
     var rpcPassword: String
-    
+  
     init(nodeAddress: String, rpcPort: String, rpcUser: String, rpcPassword: String) {
         self.nodeAddress = nodeAddress
         self.rpcPort = rpcPort
         self.rpcUser = rpcUser
         self.rpcPassword = rpcPassword
     }
-    
+  
     func sendRPC(method: String, params: [Any], completion: @escaping (Result<Any, Error>) -> Void) {
         guard let url = URL(string: "http://\(nodeAddress):\(rpcPort)") else {
             completion(.failure(NSError(domain: "", code: 0,
@@ -147,8 +144,7 @@ class RPCService {
     }
 }
 
-//  Explorer Models
-
+// Explorer Models
 struct BlockInfo: Identifiable, Equatable {
     var id: String { hash }
     let height: Int
@@ -170,8 +166,7 @@ struct TransactionModel: Identifiable, Hashable {
     let walletName: String
 }
 
-//  Wallet Address Model
-
+// Wallet Address Model
 struct WalletAddress: Identifiable, Equatable {
     let id = UUID()
     let address: String
@@ -180,8 +175,7 @@ struct WalletAddress: Identifiable, Equatable {
     var isUsed: Bool
 }
 
-//  Wallet Model
-
+// Wallet Model
 class WalletModel: Identifiable, ObservableObject, Hashable {
     static func == (lhs: WalletModel, rhs: WalletModel) -> Bool {
         lhs.id == rhs.id
@@ -199,8 +193,7 @@ class WalletModel: Identifiable, ObservableObject, Hashable {
     }
 }
 
-//  Mempool Entry Model
-
+// Mempool Entry Model
 struct MempoolEntry: Identifiable, Equatable {
     var id: String { txid }
     let txid: String
@@ -208,45 +201,141 @@ struct MempoolEntry: Identifiable, Equatable {
     let size: Int
 }
 
-//  Animated Next Block View
-
+// Animated Next Block View - Enhanced with transitions and simplified animation
 struct AnimatedNextBlockView: View {
-    @State private var fillHeight: CGFloat = 0.0
-    let animationDuration: TimeInterval = 20.0
-    
+    let mempoolEntries: [MempoolEntry]
+    let onSelect: (MempoolEntry) -> Void
+    @State private var packedPositions: [String: CGPoint] = [:]
+    @State private var offsets: [String: CGFloat] = [:]
+    @State private var opacities: [String: Double] = [:]
+    @State private var timer: Timer? = nil
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
+                // Large block container
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.blue, lineWidth: 3)
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(
-                        LinearGradient(
-                            gradient: Gradient(colors: [
-                                Color(red: 1.0, green: 0.5, blue: 0.0),
-                                Color(red: 1.0, green: 0.8, blue: 0.3)
-                            ]),
-                            startPoint: .bottom,
-                            endPoint: .top
-                        )
-                    )
-                    .frame(height: geo.size.height * fillHeight)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .onAppear {
-                Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-                    let now = Date().timeIntervalSinceReferenceDate
-                    let progress = CGFloat(fmod(now, animationDuration) / animationDuration)
-                    self.fillHeight = progress
+                    .stroke(Color.orange, lineWidth: 3)
+                    .frame(width: geo.size.width, height: geo.size.height)
+               
+                // Small transaction blocks animating in with transition
+                ForEach(mempoolEntries) { entry in
+                    if let position = packedPositions[entry.id] {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(colorForSize(size: txSize(for: entry)))
+                            .frame(width: txSize(for: entry), height: txSize(for: entry))
+                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                            .position(CGPoint(x: position.x, y: position.y + (offsets[entry.id] ?? 0)))
+                            .opacity(opacities[entry.id] ?? 1)
+                            .transition(.opacity)
+                            .onTapGesture {
+                                onSelect(entry)
+                            }
+                    }
                 }
             }
         }
         .frame(width: 300, height: 300)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            packedPositions = computePackedPositions(for: mempoolEntries, containerSize: CGSize(width: 300, height: 300))
+            animateEntries()
+            timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+                offsets = [:]
+                opacities = [:]
+                packedPositions = [:]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    packedPositions = computePackedPositions(for: mempoolEntries, containerSize: CGSize(width: 300, height: 300))
+                    animateEntries()
+                }
+            }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
+        }
+        .onChange(of: mempoolEntries) {
+            packedPositions = computePackedPositions(for: mempoolEntries, containerSize: CGSize(width: 300, height: 300))
+            animateEntries()
+        }
+    }
+  
+    private func animateEntries() {
+        for (index, entry) in mempoolEntries.enumerated() {
+            offsets[entry.id] = -50 - CGFloat(index * 10)
+            opacities[entry.id] = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * 0.05) {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                    offsets[entry.id] = 0
+                    opacities[entry.id] = 1
+                }
+            }
+        }
+    }
+  
+    private func computePackedPositions(for entries: [MempoolEntry], containerSize: CGSize) -> [String: CGPoint] {
+        var positions: [String: CGPoint] = [:]
+        var rows: [[MempoolEntry]] = []
+        var currentRow: [MempoolEntry] = []
+        var currentWidth: CGFloat = 0
+       
+        for entry in entries {
+            let s = txSize(for: entry)
+            if currentWidth + s > containerSize.width {
+                if !currentRow.isEmpty {
+                    rows.append(currentRow)
+                }
+                currentRow = []
+                currentWidth = 0
+            }
+            currentRow.append(entry)
+            currentWidth += s
+        }
+        if !currentRow.isEmpty {
+            rows.append(currentRow)
+        }
+       
+        var y: CGFloat = containerSize.height
+        for row in rows.reversed() {  // Start filling from the bottom
+            let maxH = row.map { txSize(for: $0) }.max() ?? 0
+            var x: CGFloat = 0
+            for entry in row {
+                let s = txSize(for: entry)
+                positions[entry.id] = CGPoint(x: x + s / 2, y: y - maxH / 2)
+                x += s
+            }
+            y -= maxH
+        }
+       
+        // If overflow (y < 0), we can handle it here, but for now, assume it fits
+        return positions
+    }
+  
+    private func colorForSize(size: CGFloat) -> Color {
+        let saturation: Double
+        switch size {
+        case 10:
+            saturation = 0.5
+        case 25:
+            saturation = 0.75
+        default:
+            saturation = 1.0
+        }
+        return Color(hue: 0.08, saturation: saturation, brightness: 1.0)
+    }
+  
+    private func txSize(for entry: MempoolEntry) -> CGFloat {
+        if entry.size < 200 {
+            return 10 // small
+        } else if entry.size < 500 {
+            return 25 // medium
+        } else {
+            return 40 // large
+        }
     }
 }
 
-//  Transaction Details Recursive Views
-
+// Transaction Details Recursive Views
 struct TransactionDetailsView: View {
     let details: [String: Any]
     var body: some View {
@@ -309,14 +398,12 @@ func formattedValue(for key: String, value: Any) -> String {
     }
 }
 
-//  Edit Address Label View
-
+// Edit Address Label View
 struct EditAddressLabelView: View {
     @ObservedObject var wallet: WalletModel
     var address: WalletAddress
     @Binding var newLabel: String
     @Environment(\.presentationMode) var presentationMode
-
     var body: some View {
         NavigationView {
             Form {
@@ -333,7 +420,7 @@ struct EditAddressLabelView: View {
             })
         }
     }
-    
+  
     func updateLabel() {
         if let index = wallet.addresses.firstIndex(where: { $0.id == address.id }) {
             wallet.addresses[index].label = newLabel
@@ -341,8 +428,7 @@ struct EditAddressLabelView: View {
     }
 }
 
-//  Bitcoin Node View Model
-
+// Bitcoin Node View Model
 class BitcoinNodeViewModel: ObservableObject {
     // Connection and node details
     @Published var nodeAddress: String = ""
@@ -355,51 +441,51 @@ class BitcoinNodeViewModel: ObservableObject {
     @Published var peersConnected: String = "--"
     @Published var syncStatus: String = "--"
     @Published var walletBalance: String = "--"
-    
+  
     // Explorer properties
     @Published var recentBlocks: [BlockInfo] = []
     @Published var nextBlockCandidate: BlockCandidate? = nil
-    
+  
     // Wallet properties
     @Published var recipientAddress: String = ""
     @Published var amountBTC: String = ""
     @Published var generatedAddress: String = ""
     @Published var transactions: [TransactionModel] = []
-    
+  
     // RPC and terminal
     @Published var rpcResponse: String = "RPC response will appear here..."
     @Published var rpcCommand: String = "getblockchaininfo"
-    
+  
     // Loading and error states
     @Published var isLoading: Bool = false
     @Published var errorMessage: String? = nil
     @Published var showAlert: Bool = false
     @Published var rememberMe: Bool = false
     @Published var privacyMode: Bool = false
-    
+  
     // Wallet management
     @Published var wallets: [WalletModel] = []
     @Published var selectedWallet: WalletModel? = nil
-    
+  
     // Address format selection (wallet types)
-    @Published var selectedAddressType: String = "legacy"  // Options: "legacy", "p2sh-segwit", "bech32"
-    
+    @Published var selectedAddressType: String = "legacy" // Options: "legacy", "p2sh-segwit", "bech32"
+  
     // Node History
     @Published var nodeHistory: [String] = []
-    
+  
     // Mempool transactions and entries
     @Published var mempoolTransactions: [String] = []
     @Published var mempoolEntries: [MempoolEntry] = []
-    
+  
     var rpcService: RPCService? = nil
-    
-    // Polling timers
+  
+    // Polling timers - Adjusted intervals for efficiency (less glitchy, reduce network load)
     var blockPollingTimer: AnyCancellable?
     var mempoolPollingTimer: AnyCancellable?
     var transactionPollingTimer: AnyCancellable?
     var statusPollingTimer: AnyCancellable?
-    
-    //  Transaction Send Status
+  
+    // Transaction Send Status
     enum TransactionSendStatus {
         case idle
         case processing
@@ -407,8 +493,8 @@ class BitcoinNodeViewModel: ObservableObject {
         case failure(reason: String)
     }
     @Published var transactionSendStatus: TransactionSendStatus = .idle
-    
-    //  Fee Option
+  
+    // Fee Option
     enum FeeOption: String, CaseIterable, Identifiable {
         var id: String { self.rawValue }
         case low = "Low"
@@ -418,7 +504,7 @@ class BitcoinNodeViewModel: ObservableObject {
     }
     @Published var feeOption: FeeOption = .standard
     @Published var customFeeRate: String = ""
-    
+  
     init() {
         if let currentNode = UserDefaults.standard.string(forKey: "CurrentNode") {
             self.nodeAddress = currentNode
@@ -434,48 +520,43 @@ class BitcoinNodeViewModel: ObservableObject {
         }
         self.nodeHistory = UserDefaults.standard.stringArray(forKey: "NodeHistory") ?? []
     }
-    
+  
     func fetchMempoolTransactions() {
-        rpcService?.sendRPC(method: "getrawmempool", params: []) { [weak self] result in
+        rpcService?.sendRPC(method: "getrawmempool", params: [true]) { [weak self] result in // Use verbose to get fees directly
             DispatchQueue.main.async {
                 switch result {
                 case .success(let json):
-                    if let txids = json as? [String] {
-                        self?.mempoolTransactions = Array(txids.prefix(20))
-                        self?.nextBlockCandidate = BlockCandidate(mempoolTxCount: txids.count, estimatedFee: nil)
-                        self?.fetchMempoolEntries(for: self?.mempoolTransactions ?? [])
+                    if let dict = json as? [String: Any],
+                       let resultDict = dict["result"] as? [String: [String: Any]] {
+                        var entries: [MempoolEntry] = []
+                        for (txid, info) in resultDict {
+                            var fee: Double? = nil
+                            if let fees = info["fees"] as? [String: Any],
+                               let baseFee = fees["base"] as? Double {
+                                fee = baseFee
+                            } else if let baseFee = info["fee"] as? Double {
+                                fee = baseFee
+                            }
+                            if let fee = fee,
+                               let size = info["vsize"] as? Int {
+                                entries.append(MempoolEntry(txid: txid, fee: fee, size: size))
+                            }
+                        }
+                        // Sort by fee rate descending for priority visualization
+                        entries.sort { ($0.fee / Double($0.size)) > ($1.fee / Double($1.size)) }
+                        self?.mempoolEntries = Array(entries.prefix(50)) // Limit to 50 for performance
+                        self?.mempoolTransactions = self?.mempoolEntries.map { $0.txid } ?? []
+                        self?.nextBlockCandidate = BlockCandidate(mempoolTxCount: resultDict.count, estimatedFee: nil)
                     }
                 case .failure(let error):
                     print("Error fetching mempool transactions: \(error.localizedDescription)")
+                    self?.errorMessage = error.localizedDescription
+                    self?.showAlert = true
                 }
             }
         }
     }
-    
-    func fetchMempoolEntries(for txids: [String]) {
-        self.mempoolEntries = []
-        let group = DispatchGroup()
-        for txid in txids {
-            group.enter()
-            rpcService?.sendRPC(method: "getmempoolentry", params: [txid]) { [weak self] result in
-                DispatchQueue.main.async {
-                    if case .success(let entryJson) = result,
-                       let entryDict = entryJson as? [String: Any],
-                       let resultDict = entryDict["result"] as? [String: Any],
-                       let fee = resultDict["fee"] as? Double,
-                       let size = resultDict["size"] as? Int {
-                        let entry = MempoolEntry(txid: txid, fee: fee, size: size)
-                        self?.mempoolEntries.append(entry)
-                    }
-                    group.leave()
-                }
-            }
-        }
-        group.notify(queue: .main) {
-            // Mempool entries updated.
-        }
-    }
-    
+  
     func purgeAllData() {
         disconnectNode()
         wallets = []
@@ -491,7 +572,7 @@ class BitcoinNodeViewModel: ObservableObject {
         KeychainHelper.shared.clearCredentials()
         purgeNodeHistory()
     }
-    
+  
     func connectToNode() {
         self.rpcService = RPCService(nodeAddress: nodeAddress, rpcPort: rpcPort, rpcUser: rpcUser, rpcPassword: rpcPassword)
         isLoading = true
@@ -503,7 +584,9 @@ class BitcoinNodeViewModel: ObservableObject {
                     if let jsonDict = json as? [String: Any], jsonDict["result"] != nil {
                         self?.isConnected = true
                         self?.rpcResponse = "Successfully connected to your Bitcoin node!"
-                        KeychainHelper.shared.saveCredentials(username: self?.rpcUser ?? "", password: self?.rpcPassword ?? "")
+                        if self?.rememberMe ?? false {
+                            KeychainHelper.shared.saveCredentials(username: self?.rpcUser ?? "", password: self?.rpcPassword ?? "")
+                        }
                         UserDefaults.standard.set(self?.nodeAddress, forKey: "CurrentNode")
                         UserDefaults.standard.set(self?.rpcPort, forKey: "CurrentNodePort")
                         self?.refreshNodeInfo()
@@ -511,13 +594,13 @@ class BitcoinNodeViewModel: ObservableObject {
                         self?.listWalletsFromNode()
                         self?.addNodeToHistory(node: self?.nodeAddress ?? "")
                         self?.fetchMempoolTransactions()
-                        self?.blockPollingTimer = Timer.publish(every: 5, on: .main, in: .common)
+                        self?.blockPollingTimer = Timer.publish(every: 10, on: .main, in: .common) // Increased interval for efficiency
                             .autoconnect()
                             .sink { _ in self?.fetchRecentBlocks() }
-                        self?.mempoolPollingTimer = Timer.publish(every: 2, on: .main, in: .common)
+                        self?.mempoolPollingTimer = Timer.publish(every: 5, on: .main, in: .common) // Balanced for real-time feel without overload
                             .autoconnect()
                             .sink { _ in self?.fetchMempoolTransactions() }
-                        self?.transactionPollingTimer = Timer.publish(every: 10, on: .main, in: .common)
+                        self?.transactionPollingTimer = Timer.publish(every: 30, on: .main, in: .common) // Less frequent as txs change slower
                             .autoconnect()
                             .sink { _ in
                                 self?.fetchTransactions()
@@ -525,32 +608,32 @@ class BitcoinNodeViewModel: ObservableObject {
                                 self?.fetchAddressesBalances()
                                 self?.fetchAllWalletAddresses()
                             }
-                        self?.statusPollingTimer = Timer.publish(every: 5, on: .main, in: .common)
+                        self?.statusPollingTimer = Timer.publish(every: 10, on: .main, in: .common)
                             .autoconnect()
                             .sink { _ in self?.refreshNodeInfo() }
                     } else {
                         self?.isConnected = false
-                        self?.rpcResponse = "Failed to connect to Bitcoin node, try again in 20 seconds."
+                        self?.rpcResponse = "Failed to connect to Bitcoin node."
                         self?.errorMessage = "Invalid response from node."
                         self?.showAlert = true
                     }
-                case .failure(_):
+                case .failure(let error):
                     self?.isConnected = false
-                    self?.rpcResponse = "Failed to connect to Bitcoin node, try again in 20 seconds."
-                    self?.errorMessage = "Node unreachable."
+                    self?.rpcResponse = "Failed to connect to Bitcoin node: \(error.localizedDescription). If the node is starting up, please wait a minute and try again."
+                    self?.errorMessage = error.localizedDescription
                     self?.showAlert = true
                 }
             }
         }
     }
-    
+  
     func disconnectNode() {
         isConnected = false
-        blockHeight = ""
-        mempoolSize = ""
-        peersConnected = ""
-        syncStatus = ""
-        walletBalance = ""
+        blockHeight = "--"
+        mempoolSize = "--"
+        peersConnected = "--"
+        syncStatus = "--"
+        walletBalance = "--"
         rpcResponse = "Disconnected from your Bitcoin node."
         recentBlocks = []
         nextBlockCandidate = nil
@@ -560,61 +643,63 @@ class BitcoinNodeViewModel: ObservableObject {
         transactionPollingTimer?.cancel()
         statusPollingTimer?.cancel()
     }
-    
+  
     func refreshNodeInfo() {
         guard isConnected else { return }
-        blockHeight = ""
-        mempoolSize = ""
-        peersConnected = ""
-        syncStatus = ""
         isLoading = true
         let group = DispatchGroup()
         group.enter()
         rpcService?.sendRPC(method: "getblockchaininfo", params: []) { [weak self] result in
-            defer { group.leave() }
             if case .success(let json) = result,
                let dict = json as? [String: Any],
                let resultDict = dict["result"] as? [String: Any] {
-                if let blocks = resultDict["blocks"] {
-                    self?.blockHeight = "\(blocks)"
-                }
-                if let progress = resultDict["verificationprogress"] as? Double {
-                    self?.syncStatus = String(format: "%.2f%%", progress * 100)
+                DispatchQueue.main.async {
+                    if let blocks = resultDict["blocks"] {
+                        self?.blockHeight = "\(blocks)"
+                    }
+                    if let progress = resultDict["verificationprogress"] as? Double {
+                        self?.syncStatus = String(format: "%.2f%%", progress * 100)
+                    }
                 }
             }
+            group.leave()
         }
         group.enter()
         rpcService?.sendRPC(method: "getnetworkinfo", params: []) { [weak self] result in
-            defer { group.leave() }
             if case .success(let json) = result,
                let dict = json as? [String: Any],
                let resultDict = dict["result"] as? [String: Any],
                let connections = resultDict["connections"] as? Int {
-                self?.peersConnected = "\(connections)"
+                DispatchQueue.main.async {
+                    self?.peersConnected = "\(connections)"
+                }
             }
+            group.leave()
         }
         group.enter()
         rpcService?.sendRPC(method: "getmempoolinfo", params: []) { [weak self] result in
-            defer { group.leave() }
             if case .success(let json) = result,
                let dict = json as? [String: Any],
                let resultDict = dict["result"] as? [String: Any],
                let size = resultDict["size"] as? Int {
-                self?.mempoolSize = "\(size)"
+                DispatchQueue.main.async {
+                    self?.mempoolSize = "\(size)"
+                }
             }
+            group.leave()
         }
-        group.notify(queue: .main) {
+        group.notify(queue: .main, execute: {
             self.isLoading = false
             if !self.privacyMode {
                 self.fetchBalance()
             }
-        }
+        })
     }
-    
+  
     func fetchBalance() {
         guard isConnected, selectedWallet != nil else { return }
         isLoading = true
-        sendWalletRPC(method: "getbalance", params: []) { [weak self] result in
+        sendWalletRPC(method: "getbalance", params: []) { [weak self] (result: Result<Any, Error>) in
             DispatchQueue.main.async {
                 self?.isLoading = false
                 switch result {
@@ -631,7 +716,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func fetchRecentBlocks() {
         guard isConnected, let rpcService = rpcService else { return }
         rpcService.sendRPC(method: "getblockcount", params: []) { [weak self] result in
@@ -640,6 +725,10 @@ class BitcoinNodeViewModel: ObservableObject {
                 case .success(let json):
                     if let dict = json as? [String: Any],
                        let count = dict["result"] as? Int {
+                        let previousHeight = Int(self?.blockHeight ?? "0") ?? 0
+                        if count > previousHeight {
+                            self?.nextBlockFilled()
+                        }
                         var blocks: [BlockInfo] = []
                         let group = DispatchGroup()
                         let start = max(0, count - 9)
@@ -676,15 +765,15 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func nextBlockFilled() {
         mempoolEntries = []
         fetchRecentBlocks()
         refreshNodeInfo()
     }
-    
-    //  Wallet Functions
-    
+  
+    // Wallet Functions
+  
     func createNewWallet(name: String) {
         guard isConnected, let rpcService = rpcService else { return }
         rpcService.sendRPC(method: "createwallet", params: [name]) { [weak self] result in
@@ -700,7 +789,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func sendWalletRPC(method: String, params: [Any], completion: @escaping (Result<Any, Error>) -> Void) {
         guard let wallet = selectedWallet else {
             completion(.failure(NSError(domain: "", code: 0,
@@ -749,7 +838,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }.resume()
     }
-    
+  
     func sendBitcoin() {
         guard !recipientAddress.isEmpty, !amountBTC.isEmpty, isConnected else {
             self.transactionSendStatus = .failure(reason: "Recipient or amount is empty, or node not connected.")
@@ -758,13 +847,13 @@ class BitcoinNodeViewModel: ObservableObject {
         let trimmedAmount = amountBTC.trimmingCharacters(in: .whitespacesAndNewlines)
         var amountStr = trimmedAmount
         if let first = amountStr.first, first == "." { amountStr = "0" + amountStr }
-        
+       
         let amountNumber = NSDecimalNumber(string: amountStr)
         if amountNumber == NSDecimalNumber.notANumber {
             self.transactionSendStatus = .failure(reason: "Invalid amount.")
             return
         }
-        
+       
         let balanceNumber = NSDecimalNumber(string: walletBalance)
         if amountNumber.compare(balanceNumber) == .orderedDescending {
             self.transactionSendStatus = .failure(reason: "Insufficient Bitcoin balance.")
@@ -772,7 +861,7 @@ class BitcoinNodeViewModel: ObservableObject {
             self.showAlert = true
             return
         }
-        
+       
         let feeRate: Double
         switch feeOption {
         case .low:
@@ -788,10 +877,10 @@ class BitcoinNodeViewModel: ObservableObject {
             }
             feeRate = customRate
         }
-        
+       
         transactionSendStatus = .processing
         isLoading = true
-        
+       
         sendWalletRPC(method: "settxfee", params: [feeRate]) { [weak self] result in
             DispatchQueue.main.async {
                 switch result {
@@ -842,7 +931,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func generateAddress(attempt: Int = 0) {
         if selectedWallet == nil {
             if let firstWallet = wallets.first {
@@ -894,7 +983,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func fetchTransactions() {
         isLoading = true
         sendWalletRPC(method: "listtransactions", params: ["*", 1000]) { [weak self] result in
@@ -920,7 +1009,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func executeRPC() {
         guard !rpcCommand.isEmpty else { return }
         isLoading = true
@@ -937,7 +1026,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func listWalletsFromNode() {
         guard isConnected, let rpcService = rpcService else { return }
         rpcService.sendRPC(method: "listwalletdir", params: []) { [weak self] result in
@@ -964,7 +1053,7 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func selectWallet(wallet: WalletModel) {
         guard isConnected, let rpcService = rpcService else { return }
         rpcService.sendRPC(method: "loadwallet", params: [wallet.name]) { [weak self] result in
@@ -979,22 +1068,21 @@ class BitcoinNodeViewModel: ObservableObject {
             }
         }
     }
-    
+  
     func addNodeToHistory(node: String) {
         if !nodeHistory.contains(node) {
             nodeHistory.append(node)
             UserDefaults.standard.set(nodeHistory, forKey: "NodeHistory")
         }
     }
-    
+  
     func purgeNodeHistory() {
         nodeHistory = []
         UserDefaults.standard.removeObject(forKey: "NodeHistory")
     }
 }
 
-//  Extension for Dynamic Address Balances
-
+// Extension for Dynamic Address Balances
 extension BitcoinNodeViewModel {
     func fetchAddressesBalances() {
         guard let wallet = selectedWallet else { return }
@@ -1024,9 +1112,7 @@ extension BitcoinNodeViewModel {
     }
 }
 
-//  Extension for Fetching All Generated Addresses
-
-
+// Extension for Fetching All Generated Addresses
 extension BitcoinNodeViewModel {
     func fetchAllWalletAddresses() {
         guard let _ = selectedWallet else { return }
@@ -1088,8 +1174,7 @@ extension BitcoinNodeViewModel {
     }
 }
 
-//  Transaction Row View
-
+// Transaction Row View
 struct TransactionRowView: View {
     let transaction: TransactionModel
     var body: some View {
@@ -1110,8 +1195,7 @@ struct TransactionRowView: View {
     }
 }
 
-//  Transaction Detail View
-
+// Transaction Detail View
 struct TransactionDetailView: View {
     let transaction: TransactionModel
     @ObservedObject var viewModel: BitcoinNodeViewModel
@@ -1119,11 +1203,11 @@ struct TransactionDetailView: View {
     @State private var loading: Bool = true
     @State private var error: String?
     @Environment(\.presentationMode) var presentationMode
-    
+  
     private var shortTxID: String {
         return String(transaction.txid.prefix(8))
     }
-    
+  
     var body: some View {
         NavigationView {
             Group {
@@ -1146,7 +1230,7 @@ struct TransactionDetailView: View {
             }
         }
     }
-    
+  
     func fetchDetails() {
         viewModel.sendWalletRPC(method: "gettransaction", params: [transaction.txid]) { result in
             DispatchQueue.main.async {
@@ -1177,13 +1261,78 @@ struct TransactionDetailView: View {
     }
 }
 
-//  New Wallet Sheet View
+// Mempool Tx Detail View
+struct MempoolTxDetailView: View {
+    let txid: String
+    @ObservedObject var viewModel: BitcoinNodeViewModel
+    @State private var transactionDetails: [String: Any] = [:]
+    @State private var loading: Bool = true
+    @State private var error: String?
+    @Environment(\.presentationMode) var presentationMode
+  
+    private var shortTxID: String {
+        return String(txid.prefix(8))
+    }
+  
+    var body: some View {
+        NavigationView {
+            Group {
+                if loading {
+                    ProgressView("Loading Transaction Details...")
+                } else if let error = error {
+                    Text("Error: " + error)
+                } else {
+                    ScrollView {
+                        TransactionDetailsView(details: transactionDetails)
+                    }
+                }
+            }
+            .navigationTitle("Mempool TX " + shortTxID + "...")
+            .navigationBarItems(trailing: Button("Done") {
+                presentationMode.wrappedValue.dismiss()
+            })
+            .onAppear {
+                fetchDetails()
+            }
+        }
+    }
+  
+    func fetchDetails() {
+        viewModel.rpcService?.sendRPC(method: "getrawtransaction", params: [txid, true]) { result in
+            DispatchQueue.main.async {
+                loading = false
+                switch result {
+                case .success(let json):
+                    if let dict = json as? [String: Any] {
+                        if let resultObj = dict["result"] {
+                            if let resultDict = resultObj as? [String: Any] {
+                                transactionDetails = resultDict
+                            } else {
+                                transactionDetails = ["result": resultObj]
+                            }
+                        } else if let errorObj = dict["error"] as? [String: Any],
+                                  let errMsg = errorObj["message"] as? String {
+                            error = errMsg
+                        } else {
+                            error = "Unexpected response format"
+                        }
+                    } else {
+                        error = "Unexpected response format"
+                    }
+                case .failure(let err):
+                    error = err.localizedDescription
+                }
+            }
+        }
+    }
+}
 
+// New Wallet Sheet View
 struct NewWalletSheetView: View {
     @Binding var walletName: String
     var onCreate: () -> Void
     var onCancel: () -> Void
-    
+  
     var body: some View {
         NavigationView {
             Form {
@@ -1198,15 +1347,14 @@ struct NewWalletSheetView: View {
     }
 }
 
-//  Block Detail View
-
+// Block Detail View
 struct BlockDetailView: View {
     let blockHash: String
     @ObservedObject var viewModel: BitcoinNodeViewModel
     @State private var blockDetails: [String: Any] = [:]
     @State private var blockStats: [String: Any] = [:]
     @Environment(\.presentationMode) var presentationMode
-    
+  
     var body: some View {
         NavigationView {
             List {
@@ -1299,7 +1447,7 @@ struct BlockDetailView: View {
                     }
                 }
             }
-            .listStyle(InsetGroupedListStyle())
+            .listStyle(.insetGrouped)
             .navigationTitle("Block Detail")
             .navigationBarItems(trailing: Button("Done") {
                 presentationMode.wrappedValue.dismiss()
@@ -1309,7 +1457,7 @@ struct BlockDetailView: View {
             }
         }
     }
-    
+  
     func fetchBlockData() {
         viewModel.rpcService?.sendRPC(method: "getblock", params: [blockHash, 2]) { result in
             DispatchQueue.main.async {
@@ -1326,7 +1474,7 @@ struct BlockDetailView: View {
             }
         }
     }
-    
+  
     func fetchBlockStats() {
         viewModel.rpcService?.sendRPC(method: "getblockstats", params: [blockHash]) { result in
             DispatchQueue.main.async {
@@ -1342,13 +1490,13 @@ struct BlockDetailView: View {
             }
         }
     }
-    
+  
     func dateFormatted(date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
     }
-    
+  
     func relativeTime(from date: Date) -> String {
         let interval = Date().timeIntervalSince(date)
         if interval < 60 {
@@ -1372,12 +1520,12 @@ struct BlockDetailView: View {
     }
 }
 
-//  Dashboard View
-
+// Dashboard View
 struct DashboardView: View {
     @ObservedObject var viewModel: BitcoinNodeViewModel
     @State private var selectedBlock: BlockInfo? = nil
-    
+    @State private var selectedMempoolEntry: MempoolEntry? = nil
+  
     var body: some View {
         NavigationView {
             ScrollView {
@@ -1428,7 +1576,7 @@ struct DashboardView: View {
                     .padding()
                     .background(Color(UIColor.systemGroupedBackground))
                     .cornerRadius(8)
-                    
+                   
                     HStack {
                         Text("Wallet: \(viewModel.selectedWallet?.name ?? "None")")
                             .font(.subheadline)
@@ -1447,7 +1595,7 @@ struct DashboardView: View {
                     .background(Color(UIColor.systemBackground))
                     .cornerRadius(8)
                     .padding(.horizontal)
-                    
+                   
                     VStack(spacing: 5) {
                         Text("Bitcoin Node Status")
                             .font(.title)
@@ -1460,7 +1608,7 @@ struct DashboardView: View {
                                 .foregroundColor(viewModel.isConnected ? .green : .red)
                         }
                     }
-                    
+                   
                     if viewModel.isConnected {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Block Height: \(viewModel.blockHeight)")
@@ -1471,12 +1619,12 @@ struct DashboardView: View {
                         .padding()
                         .background(Color(UIColor.secondarySystemBackground))
                         .cornerRadius(8)
-                        
-                        Text("Next Block")
+                       
+                        Text("Next Block Preview")
                             .font(.headline)
                             .padding(.top)
-                        
-                        AnimatedNextBlockView()
+                       
+                        AnimatedNextBlockView(mempoolEntries: viewModel.mempoolEntries, onSelect: { self.selectedMempoolEntry = $0 })
                             .padding()
                     }
                 }
@@ -1486,24 +1634,26 @@ struct DashboardView: View {
             .sheet(item: $selectedBlock) { block in
                 BlockDetailView(blockHash: block.hash, viewModel: viewModel)
             }
+            .sheet(item: $selectedMempoolEntry) { entry in
+                MempoolTxDetailView(txid: entry.txid, viewModel: viewModel)
+            }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationViewStyle(.stack)
     }
 }
 
-//  Wallet View
-
+// Wallet View
 struct WalletView: View {
     @ObservedObject var viewModel: BitcoinNodeViewModel
     @State private var showNewWalletSheet = false
     @State private var newWalletName: String = ""
     @State private var selectedTransaction: TransactionModel? = nil
     @State private var showSendConfirmation: Bool = false
-    
+  
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(spacing: 20) {
+                LazyVStack(spacing: 20) { // Use LazyVStack for better performance
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Wallet Management")
                             .font(.headline)
@@ -1542,9 +1692,9 @@ struct WalletView: View {
                     .padding()
                     .background(Color(UIColor.systemGroupedBackground))
                     .cornerRadius(8)
-                    
-                    
-                    
+                   
+                   
+                   
                     HStack {
                         Text("Current Wallet: \(viewModel.selectedWallet?.name ?? "None")")
                             .font(.subheadline)
@@ -1563,7 +1713,7 @@ struct WalletView: View {
                     .background(Color(UIColor.systemBackground))
                     .cornerRadius(8)
                     .padding(.horizontal)
-                    
+                   
                     if viewModel.selectedWallet != nil {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Select Address Format")
@@ -1577,7 +1727,7 @@ struct WalletView: View {
                         }
                         .padding(.horizontal)
                     }
-                    
+                   
                     if viewModel.selectedWallet != nil {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Send Bitcoin").bold()
@@ -1585,7 +1735,7 @@ struct WalletView: View {
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                             TextField("Amount (BTC)", text: $viewModel.amountBTC)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                            
+                           
                             VStack(alignment: .leading, spacing: 5) {
                                 Text("Select Fee Option")
                                 Picker("Fee Option", selection: $viewModel.feeOption) {
@@ -1599,7 +1749,7 @@ struct WalletView: View {
                                         .textFieldStyle(RoundedBorderTextFieldStyle())
                                 }
                             }
-                            
+                           
                             Button(action: {
                                 showSendConfirmation = true
                             }) {
@@ -1610,7 +1760,7 @@ struct WalletView: View {
                                     .foregroundColor(.white)
                                     .cornerRadius(8)
                             }
-                            
+                           
                             Group {
                                 switch viewModel.transactionSendStatus {
                                 case .idle:
@@ -1634,7 +1784,7 @@ struct WalletView: View {
                                 }
                             }
                             .padding(.top, 5)
-                            
+                           
                             VStack(spacing: 10) {
                                 Text("Receive Bitcoin").bold()
                                 Button(action: { viewModel.generateAddress() }) {
@@ -1661,7 +1811,7 @@ struct WalletView: View {
                         .padding()
                         .background(Color(UIColor.secondarySystemBackground))
                         .cornerRadius(8)
-                        
+                       
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Wallet Transactions (Wallet: \(viewModel.selectedWallet?.name ?? "Unknown"))")
                                 .font(.headline)
@@ -1706,16 +1856,15 @@ struct WalletView: View {
                       secondaryButton: .cancel())
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationViewStyle(.stack)
     }
 }
 
-//  Terminal View
-
+// Terminal View
 struct TerminalView: View {
     @ObservedObject var viewModel: BitcoinNodeViewModel
     @State private var selectedSegment = 0
-    
+  
     let segments = ["Terminal", "Help"]
     let helpCommands: [String] = [
         "getblockchaininfo - Get blockchain info",
@@ -1727,7 +1876,7 @@ struct TerminalView: View {
         "getnewaddress - Generate a new address",
         "help - Show help"
     ]
-    
+  
     var body: some View {
         NavigationView {
             VStack {
@@ -1781,17 +1930,16 @@ struct TerminalView: View {
             }
             .navigationTitle("Terminal")
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationViewStyle(.stack)
     }
 }
 
-//  Settings View
-
+// Settings View
 struct SettingsView: View {
     @ObservedObject var viewModel: BitcoinNodeViewModel
     @AppStorage("isDarkMode") var isDarkMode: Bool = false
     @State private var showPurgeAlert = false
-    
+  
     var body: some View {
         NavigationView {
             Form {
@@ -1869,37 +2017,32 @@ struct SettingsView: View {
                       secondaryButton: .cancel())
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationViewStyle(.stack)
     }
 }
 
-//  ContentView
-
+// ContentView
 struct ContentView: View {
     @AppStorage("isDarkMode") private var isDarkMode: Bool = false
     @StateObject var viewModel = BitcoinNodeViewModel()
-    
+  
     var body: some View {
         TabView {
             DashboardView(viewModel: viewModel)
                 .tabItem {
-                    Image(systemName: "speedometer")
-                    Text("Dashboard")
+                    Label("Dashboard", systemImage: "speedometer")
                 }
             WalletView(viewModel: viewModel)
                 .tabItem {
-                    Image(systemName: "wallet.pass")
-                    Text("Wallet")
+                    Label("Wallet", systemImage: "wallet.pass")
                 }
             TerminalView(viewModel: viewModel)
                 .tabItem {
-                    Image(systemName: "terminal.fill")
-                    Text("Terminal")
+                    Label("Terminal", systemImage: "terminal.fill")
                 }
             SettingsView(viewModel: viewModel)
                 .tabItem {
-                    Image(systemName: "gear")
-                    Text("Settings")
+                    Label("Settings", systemImage: "gear")
                 }
         }
         .preferredColorScheme(isDarkMode ? .dark : .light)
@@ -1911,8 +2054,7 @@ struct ContentView: View {
     }
 }
 
-//  Preview
-
+// Preview
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
